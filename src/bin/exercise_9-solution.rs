@@ -1,20 +1,16 @@
-/// Exercise 8:
-/// Simple client and message serialization:
-/// Use the protocol.rs file and add bincode to your project, and send a
-/// ClientMessage::Hello to your server. Decode incoming messages from the
-/// server, and do a print if it's a ServerMessage::Welcome.
-/// Modify the server to echo messages back to the client that sent it as well.
-/// Due to a quirk of bincode's encoding, ClientMessage::Hello and
-/// ServerMessage::Welcome looks the same encoded, so the echoed message will work as a server message.
-/// Useful snippets:
-///    let outgoing_message = bincode::serialize::<ClientMessage>(&client_message);
-///    let incoming_message = bincode::deserialize_from::<&TcpStream, ServerMessage>(&socket);
+/// Exercise 9:
+/// Draw the rest of the owl. (Server)
+///
+/// Implement a game where the server picks a random city name and sends it to
+/// all connected clients and let them guess the coordinates.
+/// When all clients have answered, send the answer to each of them and then
+/// print out the name of client that made the best guess to the console.
 
 use std::{collections::HashMap, io::Write, net::TcpStream, sync::mpsc::{Receiver, Sender}};
 use rand::prelude::*;
 
 use apricity::Coordinate;
-use rustdemo::{helpers::exercise_9::city_parser::{CityData, load_city_data}, protocol::{ClientMessage, ServerMessage}};
+use rustdemo::{helpers::exercise_9::city_parser::*, protocol::*};
 
 pub struct Client {
     socket: TcpStream,

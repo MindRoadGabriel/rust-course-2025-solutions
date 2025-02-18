@@ -1,4 +1,16 @@
 /// Exercise 10:
+/// Draw the rest of the owl. (Client)
+///
+/// Implement a game client for your server and base it on your world map program
+/// from exercise 5.
+///
+/// Have the client cycle through three states. Displaying the city name and
+/// asking the user to guess where the city is by clicking, asking the player to
+/// wait for the other players to guess, and displaying the distance between the
+/// guess and the correct coordinate along with circles for the clicked coordinate
+/// and the correct coordinate.
+///
+/// When you're done, connect to the teacher server and play with others who are done.
 
 use apricity::{Coordinate, Point, gui::*};
 use rustdemo::{helpers::exercise_10::draw_geo::*, protocol::*};

@@ -1,10 +1,12 @@
 /// Exercise 8:
 /// Simple client and message serialization:
+///
 /// Use the protocol.rs file and add bincode to your project, and send a
 /// ClientMessage::Hello to your server. Decode incoming messages from the
 /// server, and do a print if it's a ServerMessage::Welcome.
 /// Modify the server to decode the incoming ClientMessage and send a
 /// ServerMessage::Welcome back if the incoming message was ClientMessage::Hello
+///
 /// Useful snippets:
 ///    let outgoing_message = bincode::serialize::<ClientMessage>(&client_message);
 ///    let incoming_message = bincode::deserialize_from::<&TcpStream, ServerMessage>(&socket);

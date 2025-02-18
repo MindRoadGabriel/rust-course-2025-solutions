@@ -9,6 +9,7 @@
 /// Use the code from exercise 4 to draw a circle on each city that is largest in its country.
 /// Draw some text to the screen.
 /// Print to console when click events happen.
+///
 /// Useful snippets:
 ///     let world_map: SimpleImage = draw_geo::create_world_map(window_width, window_height).unwrap();
 ///     let font: Font<'_> = Font::try_from_bytes(ttf_noto_sans::REGULAR).unwrap();
