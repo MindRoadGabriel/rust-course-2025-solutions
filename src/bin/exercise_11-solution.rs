@@ -1,151 +1,220 @@
-use std::collections::HashMap;
+/// Exercise 11: Tie it all together. (Client)
+///
+/// Duplicate exercise_5.rs to exercise_11.rs.
+/// Also use code from exercise_8.rs.
+/// Implement the client for this game!
+///
+/// Have the client cycle through three states.
+/// a) Displaying the city name and asking the user to guess where the city is by clicking,
+/// b) asking the player to wait for the other players to guess,
+/// c) and displaying the distance between the guess and the correct coordinate
+/// along with circles for the clicked coordinate and the correct coordinate.
+///
+/// When you're done, connect to the teacher server and play with others who are done.
 
-// Part 1
-struct Wrapper<'storage> {
-    storage: &'storage str,
-}
-fn extract_from_wrapper<'a>(wrapper: &'_ Wrapper<'a>) -> &'a str {
-    wrapper.storage
+use apricity::{Coordinate, Point, gui::*};
+use rustdemo::{helpers::exercise_11::draw_geo::*, protocol::*};
+use std::{net::TcpStream, sync::mpsc, thread, time::Duration};
+
+const SERVER_IP: &str = "127.0.0.1";
+const SERVER_PORT: u16 = 12345;
+
+const WINDOW_WIDTH: u32 = 1500;
+const WINDOW_HEIGHT: u32 = 750;
+
+const FONT_SIZE: f32 = 70.0;
+const FONT_COLOR: [u8;3] = [0xFF, 0x00, 0x00];
+
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum DisplayState {
+    WaitForGuess,
+    WaitForServer {
+        guess: Coordinate,
+    },
+    WaitForContinue {
+        guess: Coordinate,
+        actual: Coordinate,
+    },
 }
 
-// Part 2
-fn get_value<'a>(map: &HashMap<&str, &'a str>, key: &str) -> Option<&'a str> {
-    match map.get(key) {
-        Some(value) => Some(value),
-        None => None,
+pub struct GameState {
+    pub current_city: String,
+    pub display: DisplayState,
+    pub sender: mpsc::Sender<ClientMessage>,
+}
+
+impl GameState {
+    fn handle_click(&mut self, click_point: Point, window_width: u32, window_height: u32) {
+        match self.display {
+            DisplayState::WaitForGuess => {
+                let coordinate = click_point.coordinate(
+                    window_width as f64,
+                    window_height as f64,
+                );
+
+                self.sender.send(
+                    ClientMessage::Guess(coordinate)
+                ).unwrap();
+                self.display = DisplayState::WaitForServer {
+                    guess: coordinate,
+                };
+            },
+            DisplayState::WaitForServer { .. } => {},
+            DisplayState::WaitForContinue { .. } => {
+                self.display = DisplayState::WaitForGuess;
+            },
+        }
     }
 }
-// Part 3
-fn insert_value<'map_key, 'key, 'map_value, 'value>(map: &mut HashMap<&'map_key str, &'map_value str>, key: &'key str, value: &'value str)
-    where 'key: 'map_key, 'value: 'map_value {
-    map.insert(key, value);
+
+fn load_font() -> Font<'static> {
+    Font::try_from_bytes(ttf_noto_sans::REGULAR).unwrap()
 }
 
-// Part 4
-struct BigObject<'countries, 'cities, 'map, 'inner, 'inner_string> {
-    country_name_to_cities: HashMap<&'countries str, Vec<&'cities str>>,
-    int_to_string: &'map HashMap<i32, String>,
-    inner_object: &'inner Inner<'inner_string>,
+fn connect_to_server() -> (mpsc::Sender<ClientMessage>, mpsc::Receiver<ServerMessage>) {
+    let (client_msg_sender, client_msg_receiver) = mpsc::channel();
+    let (server_msg_sender, server_msg_receiver) = mpsc::channel();
+
+    let socket = TcpStream::connect((SERVER_IP, SERVER_PORT)).unwrap();
+
+    let socket2 = socket.try_clone().unwrap();
+    std::thread::spawn(move || {
+        loop {
+            let response: ServerMessage = bincode::deserialize_from(&socket2).unwrap();
+            server_msg_sender.send(response).unwrap()
+        }
+    });
+
+    std::thread::spawn(move || {
+        for message in client_msg_receiver {
+            bincode::serialize_into(&socket, &message).unwrap();
+
+        }
+    });
+
+    (client_msg_sender, server_msg_receiver)
 }
-struct Inner<'inner_string> {
-    inner_number: u32,
-    inner_string: &'inner_string str,
-}
-fn divide_big_object<'object, 'countries, 'cities, 'map, 'inner, 'inner_string>(
-    object: &'object BigObject<'countries, 'cities, 'map, 'inner, 'inner_string>,
-) -> Option<(
-    &'object &'countries str,
-    &'object &'cities str,
-    &'map i32,
-    &'map str,
-    &'inner u32,
-    &'inner_string str,
-)> {
-    if let Some((country, cities)) = object.country_name_to_cities.iter().next() {
-        if let Some(first_city) = cities.first() {
-            if let Some((id_int, mapped_string)) = object.int_to_string.iter().next() {
-                return Some((
-                    country,
-                    first_city,
-                    id_int,
-                    mapped_string,
-                    &object.inner_object.inner_number,
-                    object.inner_object.inner_string,
-                ));
+
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let world_map = create_world_map(WINDOW_WIDTH, WINDOW_HEIGHT)?;
+
+    let window = SimpleWindow::new(WINDOW_WIDTH, WINDOW_HEIGHT)?;
+
+    let font = load_font();
+
+    let (sender, receiver) = connect_to_server();
+
+
+    sender.send(ClientMessage::Hello { name: "Ref. Client".to_string() })?;
+
+    let current_city = loop {
+        if let ServerMessage::Welcome { server_name } = receiver.recv()? {
+            println!("Connected to {}", server_name);
+            if let ServerMessage::NewRound { city_name } = receiver.recv()? {
+                break city_name.clone();
             }
         }
-    }
-    None
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::lifetimes_solution::*;
-    use std::collections::HashMap;
+        print!("Got an unexpected response from server.");
+        thread::sleep(Duration::from_millis(1500));
+        println!(" ...trying again.");
+        sender.send(ClientMessage::Hello { name: "Ref. Client".to_string() })?;
+    };
 
-    // Part 1
-    #[test]
-    fn test_extract_from_wrapper() {
-        let string = "value".to_string();
-        let wrapper = Wrapper {
-            storage: &string,
-        };
-        let extracted = extract_from_wrapper(&wrapper);
-        drop(wrapper);
-        assert_eq!(extracted, "value");
-    }
+    let game_state = GameState {
+        current_city: current_city.clone(),
+        display: DisplayState::WaitForGuess,
+        sender
+    };
 
-    // Part 2
-    #[test]
-    fn test_get_value() {
-        let key = "key_string".to_string();
-        let value = "value_string".to_string();
-        let mut map = HashMap::<&str, &str>::new();
-        map.insert(&key, &value);
-        let fetching_key = "key_string".to_string();
-        let returned_value = get_value(&map, &fetching_key);
-        drop(map);
-        drop(key);
-        drop(fetching_key);
-        assert_eq!(returned_value, Some("value_string"));
-    }
+    let mut banner = SimpleImage::create_text_image(&font, &current_city, FONT_SIZE, FONT_COLOR)?;
 
-    // Part 3
-    #[test]
-    fn test_insert_value() {
-        let key = "key_string".to_string();
-        let value = "value_string".to_string();
-        let mut map = HashMap::<&str, &str>::new();
-        insert_value(&mut map, &key, &value);
-        let fetching_key = "key_string".to_string();
-        let returned_value = map.get(&fetching_key as &str);
-        assert_eq!(returned_value.unwrap(), &"value_string");
-        drop(map);
-        assert_eq!(key, "key_string");
-        assert_eq!(value, "value_string");
-    }
-
-    // Part 4
-    #[test]
-    fn test_annoying_object() {
-        let inner_string = "inner".to_string();
-        let inner = Inner {
-            inner_number: 34,
-            inner_string: &inner_string,
-        };
-        let country_name = "USA".to_string();
-        let city_name = "New York".to_string();
-        let city_name_2 = "San Fransisco".to_string();
-        let city_names: Vec<&str> = vec![&city_name, &city_name_2];
-        let mut country_name_to_cities: HashMap<&str, Vec<&str>> = HashMap::new();
-        country_name_to_cities.insert(&country_name, city_names);
-        let mut int_to_string: HashMap<i32, String> = HashMap::new();
-        int_to_string.insert(14, "mapped_string".to_string());
-        let big_object = BigObject {
-            country_name_to_cities,
-            int_to_string: &int_to_string,
-            inner_object: &inner,
-        };
-        if let Some((
-            country_ref,
-            city_ref,
-            id_int_ref,
-            mapped_string_ref,
-            inner_number_ref,
-            inner_string_ref,
-        )) = divide_big_object(&big_object)
-        {
-            assert_eq!(*country_ref, "USA");
-            assert_eq!(*city_ref, "New York");
-            assert_eq!(mapped_string_ref, "mapped_string");
-            assert_eq!(*id_int_ref, 14);
-            drop(int_to_string);
-            assert_eq!(*inner_number_ref, 34);
-            drop(inner);
-            assert_eq!(inner_string_ref, "inner");
-            drop(inner_string);
-        } else {
-            panic!("Didn't divide object");
+    let mut last_display_state = game_state.display.clone();
+    window.run(game_state, |window, game_state, events| {
+        // Handle server messages
+        while let Ok(message) = receiver.try_recv() {
+            match dbg!(message) {
+                ServerMessage::Welcome {..} => {},
+                ServerMessage::NewRound { city_name } => {
+                    game_state.current_city = city_name;
+                }
+                ServerMessage::RoundResults { actual_location: actual } => {
+                    match game_state.display {
+                        DisplayState::WaitForServer { guess } => {
+                            game_state.display = DisplayState::WaitForContinue {
+                                guess,
+                                actual,
+                            };
+                        },
+                        error => {
+                            Err(format!("Unexpected state {:#?}", error.clone()).to_string())?
+                        }
+                    }
+                },
+            }
         }
-    }
+
+        // Read input
+        for event in events {
+            if let Event::MouseButtonUp { mouse_btn, clicks, x, y, .. } = event {
+                let mouse_clicked = mouse_btn == MouseButton::Left && clicks == 1;
+                if mouse_clicked {
+                    let click_point = Point::new(x as f64, y as f64);
+                    game_state.handle_click(click_point, WINDOW_WIDTH, WINDOW_HEIGHT);
+                }
+            }
+        }
+
+        // Handle game state
+        let current_display_state = &game_state.display;
+        if *current_display_state != last_display_state {
+            let screen_text = match *current_display_state {
+                DisplayState::WaitForServer { guess: _ } => "Waiting for other players".to_string(),
+                DisplayState::WaitForContinue { guess, actual } => {
+                    let distance_km = (guess.great_circle_distance(actual)/1000.0) as u32;
+                    format!("You were {}km off", distance_km)
+                },
+                DisplayState::WaitForGuess => format!("Click on {}", game_state.current_city),
+            };
+            banner = SimpleImage::create_text_image(&font, &screen_text, FONT_SIZE, FONT_COLOR)?;
+        }
+
+        // Draw
+        let half_width = (WINDOW_WIDTH/2) as i32;
+        draw_image(window, &world_map, (0,0), Alignment::Left);
+        draw_image(window, &banner, (half_width, 25), Alignment::Center);
+        match *current_display_state {
+            DisplayState::WaitForServer { guess } => {
+                let p = guess.screen(window.width() as f64, window.height() as f64);
+                window.stroke_circle(p.x,
+                                     p.y,
+                                     5.0,
+                                     2.0,
+                                     [ 0xFF, 0, 0, 0xFF ])?;
+            },
+            DisplayState::WaitForContinue { guess, actual } => {
+                let guess_point = guess.screen(window.width() as f64, window.height() as f64);
+                let actual_point = actual.screen(window.width() as f64, window.height() as f64);
+
+                window.stroke_circle(guess_point.x,
+                                     guess_point.y,
+                                     5.0,
+                                     2.0,
+                                     [ 0xFF, 0, 0, 0xFF ])?;
+
+                window.stroke_circle(actual_point.x,
+                                     actual_point.y,
+                                     5.0,
+                                     3.0,
+                                     [ 0xFF, 0xFF, 0xFF, 0xFF ])?;
+            },
+            DisplayState::WaitForGuess => {},
+        };
+
+        last_display_state = current_display_state.clone();
+        Ok(())
+    })?;
+
+    Ok(())
 }

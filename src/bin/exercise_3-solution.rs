@@ -1,8 +1,10 @@
-/// Move the common behaviour of loading the json file and the data structures to lib.rs.
+/// Exercise 3 - Modules
+/// a) Duplicate the exercise_2.rs to exercise_3.rs.
+/// b) Move the filtering function to a new file called filter.rs.
+/// c) Move the data structures and the behaviour of loading the json file to lib.rs.
+use rustdemo::{load_cities, City};
 
-use rustdemo::helpers::exercise_3::city_parser::*;
-
-pub fn largest_city(city_data : &Vec<City>, country_code : &str) {
+pub fn largest_city(city_data: &Vec<City>, country_code: &str) {
     let mut largest_city: Option<(String, i64)> = None;
     for city in city_data {
         if city.fields.country_code == country_code {
@@ -10,21 +12,18 @@ pub fn largest_city(city_data : &Vec<City>, country_code : &str) {
                 if city.fields.population > largest_population {
                     largest_city = Some((city.fields.name.clone(), city.fields.population));
                 }
-            }
-            else {
+            } else {
                 largest_city = Some((city.fields.name.clone(), city.fields.population));
             }
         }
-    };
+    }
     if let Some((name, population)) = largest_city {
         let population = population;
         println!("{}, pop: {}", name, population);
-    }
-    else {
+    } else {
         println!("Largest city not found");
     }
 }
-
 
 pub enum Filter {
     CountryCode(String),
@@ -57,16 +56,22 @@ fn filter_cities(city_data: &Vec<City>, filter: Filter) {
             }
         }
 
-        println!("{}, {}, {}, {}",
+        println!(
+            "{}, {}, {}, {}",
             city.fields.name,
             city.fields.country_code,
-            if let Some(admin1_code) = city.fields.admin1_code.clone() { admin1_code } else { "N/A".to_string() },
-        city.fields.timezone);
+            if let Some(admin1_code) = city.fields.admin1_code.clone() {
+                admin1_code
+            } else {
+                "N/A".to_string()
+            },
+            city.fields.timezone
+        );
     }
 }
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cities = load_city_data()?;
+    let cities = load_cities()?;
 
     let sweden: String = "SE".to_string();
 

@@ -1,15 +1,19 @@
-/// Exercise 8:
-/// Simple client and message serialization:
+/// Exercise 8: Simple client and message serialization
 ///
-/// Use the protocol.rs file and add bincode to your project, and send a
-/// ClientMessage::Hello to your server. Decode incoming messages from the
-/// server, and do a print if it's a ServerMessage::Welcome.
-/// Modify the server to decode the incoming ClientMessage and send a
-/// ServerMessage::Welcome back if the incoming message was ClientMessage::Hello
+/// Simple client!
+/// a) Create exercise_8_client.rs
+/// b) Use the protocol.rs file and add bincode to your project, and send a ClientMessage::Hello to your server.
+/// c) Decode incoming messages from the server, and do a print if it's a ServerMessage::Welcome.
+///
+/// Server modifications
+/// a) Duplicate exercise_7.rs to exercise_8_server.rs
+/// b) Modify the server to decode the incoming ClientMessage
+/// c) Send a ServerMessage::Welcome back if the incoming message was ClientMessage::Hello
+///
 ///
 /// Useful snippets:
-///    let outgoing_message = bincode::serialize::<ClientMessage>(&client_message);
-///    let incoming_message = bincode::deserialize_from::<&TcpStream, ServerMessage>(&socket);
+///     bincode::serialize_into(&socket, &client_message);
+///     let incoming_message = bincode::deserialize_from::<&TcpStream, ServerMessage>(&socket);
 
 use std::{collections::HashMap, net::TcpStream, sync::mpsc::{Receiver, Sender}};
 use rustdemo::protocol::{ClientMessage, ServerMessage};

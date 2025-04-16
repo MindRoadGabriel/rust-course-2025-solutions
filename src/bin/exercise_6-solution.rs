@@ -1,18 +1,20 @@
-/// Exercise 6:
-/// Simple server time!
-/// For each incoming socket, add it to a thread-shared vector, then create a thread for it.
-/// In that thread, write a hello message, then read the first message and send it to all other sockets.
-/// To handle windows terminal encoding, add codepage_437 to the project with "cargo add codepage_437"
-/// If on windows, add the windows feature for telnet client, start three terminals, and run this in each of them:
+/// Exercise 6: Simple server time!
+/// 
+/// a) Create an exercise_6.rs file.
+/// b) For each incoming socket, add it to a thread-shared vector, then create a thread for it.
+/// c) In that thread, write a hello message, then read the first message and send it to all other sockets.
+/// d) If on windows, add the windows feature for telnet client. To handle windows terminal encoding, add codepage_437 to the project with "cargo add codepage_437".
+/// e) Start three terminals, and run this in each of them:
 /// telnet localhost 12345
-/// Then try typing and see your text appear on the other terminals
+/// f) Then try typing and see your text appear on the other terminals.
+/// 
 /// Useful snippets:
-///     for socket in listener.incoming() {}
-///     let mut buffer = [0; 1024];
-///     let len = socket.read(&mut buffer).unwrap();
-///     let s = std::str::from_utf8(&buffer[0..len]).unwrap();
-///     use codepage_437::{BorrowFromCp437, CP437_CONTROL};
-///     let s = String::borrow_from_cp437(&buffer[0..len], &CP437_CONTROL);
+///    for socket in listener.incoming() {}
+///    let mut buffer = [0; 1024];
+///    let len = socket.read(&mut buffer).unwrap();
+///    let s = std::str::from_utf8(&buffer[0..len]).unwrap();
+///    use codepage_437::{BorrowFromCp437, CP437_CONTROL};
+///    let s = String::borrow_from_cp437(&buffer[0..len], &CP437_CONTROL);
 
 use std::{collections::HashMap, sync::{Arc, RwLock}};
 use std::io::{ Read, Write };

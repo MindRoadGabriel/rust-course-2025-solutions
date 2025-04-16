@@ -1,16 +1,16 @@
-/// Exercise 7:
+/// Exercise 7: Refactoring the server to use channels instead of RwLock.
 ///
-/// Refactoring the server, to use channels instead of RwLock.
-///
-/// Create a thread for message handling, that receives messages from other
-/// threads. Create an enum for the message. Use your main thread to listen
-/// for new sockets. In each socket thread, send a connection message and
-/// disconnection message to the message handling thread in the start and
-/// end, In-between, forward all received data to the message handling thread.
+/// a) Duplicate exercise_7.rs to exercise_8.rs.
+/// b) Make a central thread that receives messages when a socket connects, disconnects or receives data from its remote client.
+/// c) Move the vector of sockets to a central thread, and have it add and remove sockets based on the messages.
+/// d) Have the central thread forward text from any sockets to all other sockets.
+/// e) Use the main thread for listening for new connections and creating client threads.
 ///
 /// Useful snippets:
 ///    let (sender, receiver) = std::sync::mpsc::channel::<SocketEvent>();
 ///    sender.send(SocketEvent::Connect(socket_id, socket_clone))
+///
+
 
 use std::{collections::HashMap, net::TcpStream, sync::mpsc::{Receiver, Sender}};
 use std::io::{ Read, Write };

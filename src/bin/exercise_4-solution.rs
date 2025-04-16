@@ -1,15 +1,25 @@
-/// Write a program that prints the largest city for each country
+/// Exercise 4 - HashMaps
+///
+/// a) Duplicate the exercise_3.rs to exercise_4.rs.
+/// b) Write a program that prints the largest city for each country
 ///
 /// Useful snippets:
-///   use std::collections::HashMap;
-///   let mut countries = HashMap::new();
-///   countries.entry("Countryname").and_modify(|stored_item| *stored_item = item).or_insert(item);
+///     use std::collections::HashMap;
+///     let mut countries = HashMap::new();
+///     match countries.entry("Country Name") {
+///         Entry::Occupied(mut occupied) => {
+///             *occupied.get_mut() = item;
+///         }
+///         Entry::Vacant(vacant) => {
+///             vacant.insert(item);
+///         }
+///     }
 
 use std::collections::HashMap;
-use rustdemo::helpers::exercise_4::city_parser::*;
+use rustdemo::CityData;
 
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cities = load_city_data()?;
+    let cities = rustdemo::load_city_data()?;
 
     let cities = largest_city_for_each_country(cities);
     let mut cities: Vec<CityData> = cities.iter().map(|(_, city)| city.clone()).collect();

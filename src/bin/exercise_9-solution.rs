@@ -1,260 +1,157 @@
-/// Exercise 9:
-/// Draw the rest of the owl. (Server)
-///
-/// Implement a game where the server picks a random city name and sends it to
-/// all connected clients and let them guess the coordinates.
-/// When all clients have answered, send the answer to each of them and then
-/// print out the name of client that made the best guess to the console.
+#![allow(unused_imports, dead_code)]
+/// Exercise 9: Lifetimes
+/// a) By only applying lifetimes to the provided functions, make it compile.
+/// b) Use "cargo test" to run the tests.
+/// c) Uncomment more sections and more tests as you complete them.
+use std::collections::HashMap;
+fn main() {}
 
-use std::{collections::HashMap, io::Write, net::TcpStream, sync::mpsc::{Receiver, Sender}};
-use rand::prelude::*;
-
-use apricity::Coordinate;
-use rustdemo::{helpers::exercise_9::city_parser::*, protocol::*};
-
-pub struct Client {
-    socket: TcpStream,
-    name: Option<String>,
-    guess: Option<Coordinate>,
+// Part 1
+struct Wrapper<'storage> {
+    storage: &'storage str,
+}
+fn extract_from_wrapper<'a>(wrapper: &'_ Wrapper<'a>) -> &'a str {
+    wrapper.storage
 }
 
-impl Client {
-    pub fn new(socket: TcpStream) -> Client {
-        Client {
-            socket,
-            name: None,
-            guess: None,
-        }
+// Part 2
+fn get_value<'a>(map: &HashMap<&str, &'a str>, key: &str) -> Option<&'a str> {
+    match map.get(key) {
+        Some(value) => Some(value),
+        None => None,
     }
 }
-
-impl Write for Client {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.socket.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.socket.flush()
-    }
+// Part 3
+fn insert_value<'map_key, 'key, 'map_value, 'value>(map: &mut HashMap<&'map_key str, &'map_value str>, key: &'key str, value: &'value str)
+    where 'key: 'map_key, 'value: 'map_value {
+    map.insert(key, value);
 }
 
-pub enum SocketEvent {
-    Connect(u32, TcpStream),
-    ClientMessage(u32, ClientMessage),
-    Disconnect(u32),
+// Part 4
+struct BigObject<'countries, 'cities, 'map, 'inner, 'inner_string> {
+    country_name_to_cities: HashMap<&'countries str, Vec<&'cities str>>,
+    int_to_string: &'map HashMap<i32, String>,
+    inner_object: &'inner Inner<'inner_string>,
+}
+struct Inner<'inner_string> {
+    inner_number: u32,
+    inner_string: &'inner_string str,
+}
+fn divide_big_object<'object, 'countries, 'cities, 'map, 'inner, 'inner_string>(
+    object: &'object BigObject<'countries, 'cities, 'map, 'inner, 'inner_string>,
+) -> Option<(
+    &'object &'countries str,
+    &'object &'cities str,
+    &'map i32,
+    &'map str,
+    &'inner u32,
+    &'inner_string str,
+)> {
+    if let Some((country, cities)) = object.country_name_to_cities.iter().next() {
+        if let Some(first_city) = cities.first() {
+            if let Some((id_int, mapped_string)) = object.int_to_string.iter().next() {
+                return Some((
+                    country,
+                    first_city,
+                    id_int,
+                    mapped_string,
+                    &object.inner_object.inner_number,
+                    object.inner_object.inner_string,
+                ));
+            }
+        }
+    }
+    None
 }
 
-struct GameHandler {
-    cities: Vec<CityData>,
-    clients: HashMap<u32, Client>,
-    current_city: Option<CityData>,
-    rng: ThreadRng
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
 
-impl GameHandler {
-    pub fn new() -> GameHandler {
-        GameHandler {
-            cities: load_city_data().unwrap(),
-            clients: HashMap::new(),
-            current_city: None,
-            rng: thread_rng()
-        }
-    }
-
-    pub fn add_client(&mut self, client_id: u32, socket: TcpStream) {
-        self.clients.insert(client_id, Client::new(socket));
-    }
-
-    pub fn remove_client(&mut self, client_id: u32) {
-        if let Some(client) = self.clients.remove(&client_id) {
-            let _ = client.socket.shutdown(std::net::Shutdown::Both);
-        }
-    }
-
-    pub fn handle_client_message(&mut self, client_id: u32, client_message: ClientMessage) {
-        match client_message {
-            ClientMessage::Hello { name } => {
-                self.clients.entry(client_id).and_modify(|client| client.name = Some(name));
-                self.send_message_to_client(client_id, &ServerMessage::Welcome { server_name: "ref-server".to_string() });
-
-                // If there's an ongoing game, include the player.
-                if let Some(current_city) = &self.current_city {
-                    self.send_message_to_client(client_id, &ServerMessage::NewRound { city_name: current_city.name.to_string() });
-                }
-            }
-            ClientMessage::Guess(coordinate) => {
-                self.clients.entry(client_id).and_modify(|client | client.guess = Some(coordinate));
-            }
-        }
-
-        // Check if all players have answered
-        if let Some(current_city_data) = &self.current_city {
-            println!("Checking if all players have answered.");
-            let mut all_done = true;
-            for (_, client) in self.clients.iter() {
-                if client.name.is_some() {
-                    // Let's not let a newly connected client detain the current game
-                    all_done = all_done && client.guess.is_some();
-                }
-            }
-
-            if all_done {
-                println!("All done! Sending round results.");
-                let actual_coordinates = current_city_data.coordinates;
-
-                if let Some((winner_id, winner, dist)) = self.calculate_winner(&actual_coordinates) {
-                    let winner_name = winner.name.clone().unwrap_or("[Unknown]".to_string());
-                    println!(r#"Player "{}", socket_id {} won with a distance of {} km."#, winner_name, winner_id, (dist/1000.0) as u32);
-                }
-                else {
-                    println!("No winner in this round.");
-                }
-
-                let round_results_message = ServerMessage::RoundResults { actual_location: actual_coordinates };
-                for (socket_id, client) in self.clients.iter() {
-                    if client.name.is_some() {
-                        self.send_message_to_client(*socket_id, &round_results_message);
-                    }
-                }
-
-                self.current_city = None;
-            }
-        }
-
-        if self.current_city.is_none() {
-            println!("No current game in progress. Starting new round.");
-            let new_city_index: usize = self.rng.gen_range(0..self.cities.len());
-            let new_city = self.cities.get(new_city_index).unwrap().clone();
-            let city_name = new_city.name.to_string();
-            let new_round_message = ServerMessage::NewRound { city_name: city_name };
-            for (client_id, client) in self.clients.iter_mut() {
-                if client.name.is_some() {
-                    client.guess = None;
-                    GameHandler::send_message(*client_id, &client, &new_round_message);
-                }
-            }
-
-            self.current_city = Some(new_city);
-        }
-
-    }
-
-    pub fn send_message_to_client(&self, client_id: u32, message: &ServerMessage) {
-        let socket = &self.clients.get(&client_id).unwrap().socket;
-        if let Err(error) = bincode::serialize_into(socket, &message) {
-            println!("Couldn't send to  client_id {}: {:#?}", client_id, error);
-            return;
-        }
-
-        let message_type = match message {
-            ServerMessage::Welcome { server_name: _ } => "WELCOME".to_string(),
-            ServerMessage::NewRound { city_name: _} => "NEW_ROUND".to_string(),
-            ServerMessage::RoundResults { actual_location: _ } => "ROUND_RESULTS".to_string()
+    // Part 1
+    #[test]
+    fn test_extract_from_wrapper() {
+        let string = "value".to_string();
+        let wrapper = Wrapper {
+            storage: &string,
         };
-        println!("Sending response {message_type} to socket_id {client_id}", );
+        let extracted = extract_from_wrapper(&wrapper);
+        drop(wrapper);
+        assert_eq!(extracted, "value");
     }
 
-    fn send_message(client_id: u32, client: &Client, message: &ServerMessage) {
-        let socket = &client.socket;
-        if let Err(error) = bincode::serialize_into(socket, &message) {
-            println!("Couldn't send to  client_id {}: {:#?}", client_id, error);
-            return;
-        }
+    // Part 2
+    #[test]
+    fn test_get_value() {
+        let key = "key_string".to_string();
+        let value = "value_string".to_string();
+        let mut map = HashMap::<&str, &str>::new();
+        map.insert(&key, &value);
+        let fetching_key = "key_string".to_string();
+        let returned_value = get_value(&map, &fetching_key);
+        drop(map);
+        drop(key);
+        drop(fetching_key);
+        assert_eq!(returned_value, Some("value_string"));
+    }
 
-        let message_type = match message {
-            ServerMessage::Welcome { server_name: _ } => "WELCOME".to_string(),
-            ServerMessage::NewRound { city_name: _} => "NEW_ROUND".to_string(),
-            ServerMessage::RoundResults { actual_location: _ } => "ROUND_RESULTS".to_string()
+    // Part 3
+    #[test]
+    fn test_insert_value() {
+        let key = "key_string".to_string();
+        let value = "value_string".to_string();
+        let mut map = HashMap::<&str, &str>::new();
+        insert_value(&mut map, &key, &value);
+        let fetching_key = "key_string".to_string();
+        let returned_value = map.get(&fetching_key as &str);
+        assert_eq!(returned_value.unwrap(), &"value_string");
+        drop(map);
+        assert_eq!(key, "key_string");
+        assert_eq!(value, "value_string");
+    }
+
+    // Part 4
+    #[test]
+    fn test_annoying_object() {
+        let inner_string = "inner".to_string();
+        let inner = Inner {
+            inner_number: 34,
+            inner_string: &inner_string,
         };
-        println!("Sending response {message_type} to socket_id {client_id}", );
-    }
-
-    fn calculate_winner(&self, actual_coordinates: &Coordinate) -> Option::<(u32, &Client, f64)> {
-        let mut closest_dist = f64::MAX;
-        let mut closest_client = None;
-        for (client_id, client) in self.clients.iter() {
-            if let Some(guessed_coordinates) = client.guess {
-                let dist = actual_coordinates.great_circle_distance(guessed_coordinates);
-                if dist < closest_dist {
-                    closest_dist = dist;
-                    closest_client = Some(*client_id);
-                }
-            }
-        }
-
-        if let Some(client_id) = closest_client {
-            return Some((client_id, &self.clients[&client_id], closest_dist));
-        }
-        None
-    }
-}
-
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (sender, receiver) = std::sync::mpsc::channel::<SocketEvent>();
-    std::thread::spawn(move || message_handler(receiver));
-
-    let listener = std::net::TcpListener::bind(("0.0.0.0", 12345))?;
-    let mut socket_counter: u32 = 0;
-    for socket in listener.incoming() {
-        let socket = match socket {
-            Ok(x) => x,
-            Err(e) => {
-                eprintln!("{:?}", e);
-                continue;
-            },
+        let country_name = "USA".to_string();
+        let city_name = "New York".to_string();
+        let city_name_2 = "San Fransisco".to_string();
+        let city_names: Vec<&str> = vec![&city_name, &city_name_2];
+        let mut country_name_to_cities: HashMap<&str, Vec<&str>> = HashMap::new();
+        country_name_to_cities.insert(&country_name, city_names);
+        let mut int_to_string: HashMap<i32, String> = HashMap::new();
+        int_to_string.insert(14, "mapped_string".to_string());
+        let big_object = BigObject {
+            country_name_to_cities,
+            int_to_string: &int_to_string,
+            inner_object: &inner,
         };
-
-        let socket_id = socket_counter;
-        socket_counter += 1;
-
-        let client_sender = sender.clone();
-        std::thread::spawn(move || connection_handler(socket_id, socket, client_sender));
-    }
-
-    Ok(())
-}
-
-fn message_handler(receiver: Receiver<SocketEvent>) {
-    let mut game_handler = GameHandler::new();
-    for event in receiver {
-        match event {
-            SocketEvent::Connect(socket_id, socket) => {
-                game_handler.add_client(socket_id.clone(), socket);
-                println!("New connection received. socket_id = {socket_id}");
-            },
-            SocketEvent::ClientMessage(sender_id, message) => {
-                game_handler.handle_client_message(sender_id, message);
-
-
-            },
-            SocketEvent::Disconnect(socket_id) => {
-                game_handler.remove_client(socket_id);
-                println!("Connection to socket_id {socket_id} lost.");
-            },
+        if let Some((
+            country_ref,
+            city_ref,
+            id_int_ref,
+            mapped_string_ref,
+            inner_number_ref,
+            inner_string_ref,
+        )) = divide_big_object(&big_object)
+        {
+            assert_eq!(*country_ref, "USA");
+            assert_eq!(*city_ref, "New York");
+            assert_eq!(mapped_string_ref, "mapped_string");
+            assert_eq!(*id_int_ref, 14);
+            drop(int_to_string);
+            assert_eq!(*inner_number_ref, 34);
+            drop(inner);
+            assert_eq!(inner_string_ref, "inner");
+            drop(inner_string);
+        } else {
+            panic!("Didn't divide object");
         }
     }
 }
-
-fn connection_handler(socket_id: u32, socket: TcpStream, sender: Sender<SocketEvent>) {
-    let socket2 = socket.try_clone().unwrap();
-    if let Err(error) = sender.send(SocketEvent::Connect(socket_id, socket2)) {
-        eprintln!("{:?}", error);
-        let _ = socket.shutdown(std::net::Shutdown::Both);
-        return;
-    }
-
-    while let Ok(message) = bincode::deserialize_from(&socket) {
-
-        match sender.send(SocketEvent::ClientMessage(socket_id, message)) {
-            Ok(_) => {},
-            Err(error) => {
-                eprintln!("{:?}", error);
-                break;
-            },
-        };
-    }
-
-    let _ = sender.send(SocketEvent::Disconnect(socket_id));
-    let _ = socket.shutdown(std::net::Shutdown::Both);
-}
-

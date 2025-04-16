@@ -1,4 +1,5 @@
-/// Exercise 5:
+/// Exercise 5: Hello Apricity
+///
 /// Add the library "apricity" to the project and create a window.
 ///
 /// > cargo add apricity --git https://github.com/MindroadGabriel/apricity.git

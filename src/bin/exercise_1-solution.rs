@@ -1,14 +1,26 @@
-/// Exercise 1
-/// Load the cities data from the file "cities100k.json", and find all cities in california that have more than a million people.
+/// Exercise 1 - First steps
+/// Work in this file or create a new project and copy files and code over as needed.
 ///
-/// To create a new project for the exercise:
-/// From the terminal run:
+/// If you decide to create a new project,
+/// from the terminal run:
 /// > cargo new rust-course
 /// > cd rust_course
 /// > cargo add serde --features derive
 /// > cargo add serde_json
+/// To run the code in this file, do
+/// > cargo run --bin exercise_1
+/// To run the code in main.rs, do
+/// > cargo run --bin rust_course_2025
+/// where rust_course_2025 is the package name.
 ///
-/// Cities100k.json has the following structure:
+/// Goal:
+/// a) Load the cities data from the file "cities100k.json" and find all cities
+/// b) in the US
+/// c) in California (admin1_code == "CA")
+/// d) with a population over one million people
+/// e) and print those cities
+
+// Cities100k.json has the following structure:
 /*
   {
     "datasetid": "geonames-all-cities-with-a-population-1000@public",

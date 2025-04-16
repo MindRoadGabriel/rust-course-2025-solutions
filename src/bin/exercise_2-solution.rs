@@ -1,10 +1,15 @@
-/// 1. Move the read_to_string and serde_json::from_str calls into a separate
-///    function.
-/// 2. Write a function which prints the largest city for a given a the
-///    list of cities and a given country.
-/// 3. Write a function that takes a "filter" parameter, which is an enum
-///    of multiple variants: CountryCode, Admin1Code or TimeZone. Print
-///    the name of all cities that match that filter.
+/// Exercise 2 - Functions
+/// a) Duplicate the exercise_1.rs file and call the copy exercise_2.rs.
+///
+/// b) Move the read_to_string and serde_json::from_str calls into a separate function.
+///
+/// c) Write a function which accepts the list of cities, and a country.
+///    Have it print the largest city in that country.
+///
+/// d) Write a function that takes a "filter" parameter, which is an enum
+///    of multiple variants: CountryCode, Admin1Code or TimeZone.
+///    Have each variant contain a String.
+///    Print the name of all cities that match that filter.
 
 use std::fs;
 

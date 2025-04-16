@@ -1,220 +1,259 @@
-/// Exercise 10:
-/// Draw the rest of the owl. (Client)
+/// Exercise 10: Tie it all together (server)
 ///
-/// Implement a game client for your server and base it on your world map program
-/// from exercise 5.
-///
-/// Have the client cycle through three states. Displaying the city name and
-/// asking the user to guess where the city is by clicking, asking the player to
-/// wait for the other players to guess, and displaying the distance between the
-/// guess and the correct coordinate along with circles for the clicked coordinate
-/// and the correct coordinate.
-///
-/// When you're done, connect to the teacher server and play with others who are done.
+/// Implement a game where the server picks a random city name and sends it to
+/// all connected clients and let them guess the coordinates.
+/// When all clients have answered, send the answer to each of them and then
+/// print out the name of client that made the best guess to the console.
 
-use apricity::{Coordinate, Point, gui::*};
-use rustdemo::{helpers::exercise_10::draw_geo::*, protocol::*};
-use std::{net::TcpStream, sync::mpsc, thread, time::Duration};
+use std::{collections::HashMap, io::Write, net::TcpStream, sync::mpsc::{Receiver, Sender}};
+use rand::prelude::*;
 
-const SERVER_IP: &str = "127.0.0.1";
-const SERVER_PORT: u16 = 12345;
+use apricity::Coordinate;
+use rustdemo::{helpers::exercise_10::city_parser::*, protocol::*};
 
-const WINDOW_WIDTH: u32 = 1500;
-const WINDOW_HEIGHT: u32 = 750;
-
-const FONT_SIZE: f32 = 70.0;
-const FONT_COLOR: [u8;3] = [0xFF, 0x00, 0x00];
-
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum DisplayState {
-    WaitForGuess,
-    WaitForServer {
-        guess: Coordinate,
-    },
-    WaitForContinue {
-        guess: Coordinate,
-        actual: Coordinate,
-    },
+pub struct Client {
+    socket: TcpStream,
+    name: Option<String>,
+    guess: Option<Coordinate>,
 }
 
-pub struct GameState {
-    pub current_city: String,
-    pub display: DisplayState,
-    pub sender: mpsc::Sender<ClientMessage>,
+impl Client {
+    pub fn new(socket: TcpStream) -> Client {
+        Client {
+            socket,
+            name: None,
+            guess: None,
+        }
+    }
 }
 
-impl GameState {
-    fn handle_click(&mut self, click_point: Point, window_width: u32, window_height: u32) {
-        match self.display {
-            DisplayState::WaitForGuess => {
-                let coordinate = click_point.coordinate(
-                    window_width as f64,
-                    window_height as f64,
-                );
+impl Write for Client {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.socket.write(buf)
+    }
 
-                self.sender.send(
-                    ClientMessage::Guess(coordinate)
-                ).unwrap();
-                self.display = DisplayState::WaitForServer {
-                    guess: coordinate,
-                };
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.socket.flush()
+    }
+}
+
+pub enum SocketEvent {
+    Connect(u32, TcpStream),
+    ClientMessage(u32, ClientMessage),
+    Disconnect(u32),
+}
+
+struct GameHandler {
+    cities: Vec<CityData>,
+    clients: HashMap<u32, Client>,
+    current_city: Option<CityData>,
+    rng: ThreadRng
+}
+
+impl GameHandler {
+    pub fn new() -> GameHandler {
+        GameHandler {
+            cities: load_city_data().unwrap(),
+            clients: HashMap::new(),
+            current_city: None,
+            rng: thread_rng()
+        }
+    }
+
+    pub fn add_client(&mut self, client_id: u32, socket: TcpStream) {
+        self.clients.insert(client_id, Client::new(socket));
+    }
+
+    pub fn remove_client(&mut self, client_id: u32) {
+        if let Some(client) = self.clients.remove(&client_id) {
+            let _ = client.socket.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    pub fn handle_client_message(&mut self, client_id: u32, client_message: ClientMessage) {
+        match client_message {
+            ClientMessage::Hello { name } => {
+                self.clients.entry(client_id).and_modify(|client| client.name = Some(name));
+                self.send_message_to_client(client_id, &ServerMessage::Welcome { server_name: "ref-server".to_string() });
+
+                // If there's an ongoing game, include the player.
+                if let Some(current_city) = &self.current_city {
+                    self.send_message_to_client(client_id, &ServerMessage::NewRound { city_name: current_city.name.to_string() });
+                }
+            }
+            ClientMessage::Guess(coordinate) => {
+                self.clients.entry(client_id).and_modify(|client | client.guess = Some(coordinate));
+            }
+        }
+
+        // Check if all players have answered
+        if let Some(current_city_data) = &self.current_city {
+            println!("Checking if all players have answered.");
+            let mut all_done = true;
+            for (_, client) in self.clients.iter() {
+                if client.name.is_some() {
+                    // Let's not let a newly connected client detain the current game
+                    all_done = all_done && client.guess.is_some();
+                }
+            }
+
+            if all_done {
+                println!("All done! Sending round results.");
+                let actual_coordinates = current_city_data.coordinates;
+
+                if let Some((winner_id, winner, dist)) = self.calculate_winner(&actual_coordinates) {
+                    let winner_name = winner.name.clone().unwrap_or("[Unknown]".to_string());
+                    println!(r#"Player "{}", socket_id {} won with a distance of {} km."#, winner_name, winner_id, (dist/1000.0) as u32);
+                }
+                else {
+                    println!("No winner in this round.");
+                }
+
+                let round_results_message = ServerMessage::RoundResults { actual_location: actual_coordinates };
+                for (socket_id, client) in self.clients.iter() {
+                    if client.name.is_some() {
+                        self.send_message_to_client(*socket_id, &round_results_message);
+                    }
+                }
+
+                self.current_city = None;
+            }
+        }
+
+        if self.current_city.is_none() {
+            println!("No current game in progress. Starting new round.");
+            let new_city_index: usize = self.rng.gen_range(0..self.cities.len());
+            let new_city = self.cities.get(new_city_index).unwrap().clone();
+            let city_name = new_city.name.to_string();
+            let new_round_message = ServerMessage::NewRound { city_name: city_name };
+            for (client_id, client) in self.clients.iter_mut() {
+                if client.name.is_some() {
+                    client.guess = None;
+                    GameHandler::send_message(*client_id, &client, &new_round_message);
+                }
+            }
+
+            self.current_city = Some(new_city);
+        }
+
+    }
+
+    pub fn send_message_to_client(&self, client_id: u32, message: &ServerMessage) {
+        let socket = &self.clients.get(&client_id).unwrap().socket;
+        if let Err(error) = bincode::serialize_into(socket, &message) {
+            println!("Couldn't send to  client_id {}: {:#?}", client_id, error);
+            return;
+        }
+
+        let message_type = match message {
+            ServerMessage::Welcome { server_name: _ } => "WELCOME".to_string(),
+            ServerMessage::NewRound { city_name: _} => "NEW_ROUND".to_string(),
+            ServerMessage::RoundResults { actual_location: _ } => "ROUND_RESULTS".to_string()
+        };
+        println!("Sending response {message_type} to socket_id {client_id}", );
+    }
+
+    fn send_message(client_id: u32, client: &Client, message: &ServerMessage) {
+        let socket = &client.socket;
+        if let Err(error) = bincode::serialize_into(socket, &message) {
+            println!("Couldn't send to  client_id {}: {:#?}", client_id, error);
+            return;
+        }
+
+        let message_type = match message {
+            ServerMessage::Welcome { server_name: _ } => "WELCOME".to_string(),
+            ServerMessage::NewRound { city_name: _} => "NEW_ROUND".to_string(),
+            ServerMessage::RoundResults { actual_location: _ } => "ROUND_RESULTS".to_string()
+        };
+        println!("Sending response {message_type} to socket_id {client_id}", );
+    }
+
+    fn calculate_winner(&self, actual_coordinates: &Coordinate) -> Option::<(u32, &Client, f64)> {
+        let mut closest_dist = f64::MAX;
+        let mut closest_client = None;
+        for (client_id, client) in self.clients.iter() {
+            if let Some(guessed_coordinates) = client.guess {
+                let dist = actual_coordinates.great_circle_distance(guessed_coordinates);
+                if dist < closest_dist {
+                    closest_dist = dist;
+                    closest_client = Some(*client_id);
+                }
+            }
+        }
+
+        if let Some(client_id) = closest_client {
+            return Some((client_id, &self.clients[&client_id], closest_dist));
+        }
+        None
+    }
+}
+
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let (sender, receiver) = std::sync::mpsc::channel::<SocketEvent>();
+    std::thread::spawn(move || message_handler(receiver));
+
+    let listener = std::net::TcpListener::bind(("0.0.0.0", 12345))?;
+    let mut socket_counter: u32 = 0;
+    for socket in listener.incoming() {
+        let socket = match socket {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("{:?}", e);
+                continue;
             },
-            DisplayState::WaitForServer { .. } => {},
-            DisplayState::WaitForContinue { .. } => {
-                self.display = DisplayState::WaitForGuess;
+        };
+
+        let socket_id = socket_counter;
+        socket_counter += 1;
+
+        let client_sender = sender.clone();
+        std::thread::spawn(move || connection_handler(socket_id, socket, client_sender));
+    }
+
+    Ok(())
+}
+
+fn message_handler(receiver: Receiver<SocketEvent>) {
+    let mut game_handler = GameHandler::new();
+    for event in receiver {
+        match event {
+            SocketEvent::Connect(socket_id, socket) => {
+                game_handler.add_client(socket_id.clone(), socket);
+                println!("New connection received. socket_id = {socket_id}");
+            },
+            SocketEvent::ClientMessage(sender_id, message) => {
+                game_handler.handle_client_message(sender_id, message);
+
+
+            },
+            SocketEvent::Disconnect(socket_id) => {
+                game_handler.remove_client(socket_id);
+                println!("Connection to socket_id {socket_id} lost.");
             },
         }
     }
 }
 
-fn load_font() -> Font<'static> {
-    Font::try_from_bytes(ttf_noto_sans::REGULAR).unwrap()
-}
-
-fn connect_to_server() -> (mpsc::Sender<ClientMessage>, mpsc::Receiver<ServerMessage>) {
-    let (client_msg_sender, client_msg_receiver) = mpsc::channel();
-    let (server_msg_sender, server_msg_receiver) = mpsc::channel();
-
-    let socket = TcpStream::connect((SERVER_IP, SERVER_PORT)).unwrap();
-
+fn connection_handler(socket_id: u32, socket: TcpStream, sender: Sender<SocketEvent>) {
     let socket2 = socket.try_clone().unwrap();
-    std::thread::spawn(move || {
-        loop {
-            let response: ServerMessage = bincode::deserialize_from(&socket2).unwrap();
-            server_msg_sender.send(response).unwrap()
-        }
-    });
+    if let Err(error) = sender.send(SocketEvent::Connect(socket_id, socket2)) {
+        eprintln!("{:?}", error);
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+        return;
+    }
 
-    std::thread::spawn(move || {
-        for message in client_msg_receiver {
-            bincode::serialize_into(&socket, &message).unwrap();
+    while let Ok(message) = bincode::deserialize_from(&socket) {
 
-        }
-    });
-
-    (client_msg_sender, server_msg_receiver)
-}
-
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let world_map = create_world_map(WINDOW_WIDTH, WINDOW_HEIGHT)?;
-
-    let window = SimpleWindow::new(WINDOW_WIDTH, WINDOW_HEIGHT)?;
-
-    let font = load_font();
-
-    let (sender, receiver) = connect_to_server();
-
-
-    sender.send(ClientMessage::Hello { name: "Ref. Client".to_string() })?;
-
-    let current_city = loop {
-        if let ServerMessage::Welcome { server_name } = receiver.recv()? {
-            println!("Connected to {}", server_name);
-            if let ServerMessage::NewRound { city_name } = receiver.recv()? {
-                break city_name.clone();
-            }
-        }
-
-        print!("Got an unexpected response from server.");
-        thread::sleep(Duration::from_millis(1500));
-        println!(" ...trying again.");
-        sender.send(ClientMessage::Hello { name: "Ref. Client".to_string() })?;
-    };
-
-    let game_state = GameState {
-        current_city: current_city.clone(),
-        display: DisplayState::WaitForGuess,
-        sender
-    };
-
-    let mut banner = SimpleImage::create_text_image(&font, &current_city, FONT_SIZE, FONT_COLOR)?;
-
-    let mut last_display_state = game_state.display.clone();
-    window.run(game_state, |window, game_state, events| {
-        // Handle server messages
-        while let Ok(message) = receiver.try_recv() {
-            match dbg!(message) {
-                ServerMessage::Welcome {..} => {},
-                ServerMessage::NewRound { city_name } => {
-                    game_state.current_city = city_name;
-                }
-                ServerMessage::RoundResults { actual_location: actual } => {
-                    match game_state.display {
-                        DisplayState::WaitForServer { guess } => {
-                            game_state.display = DisplayState::WaitForContinue {
-                                guess,
-                                actual,
-                            };
-                        },
-                        error => {
-                            Err(format!("Unexpected state {:#?}", error.clone()).to_string())?
-                        }
-                    }
-                },
-            }
-        }
-
-        // Read input
-        for event in events {
-            if let Event::MouseButtonUp { mouse_btn, clicks, x, y, .. } = event {
-                let mouse_clicked = mouse_btn == MouseButton::Left && clicks == 1;
-                if mouse_clicked {
-                    let click_point = Point::new(x as f64, y as f64);
-                    game_state.handle_click(click_point, WINDOW_WIDTH, WINDOW_HEIGHT);
-                }
-            }
-        }
-
-        // Handle game state
-        let current_display_state = &game_state.display;
-        if *current_display_state != last_display_state {
-            let screen_text = match *current_display_state {
-                DisplayState::WaitForServer { guess: _ } => "Waiting for other players".to_string(),
-                DisplayState::WaitForContinue { guess, actual } => {
-                    let distance_km = (guess.great_circle_distance(actual)/1000.0) as u32;
-                    format!("You were {}km off", distance_km)
-                },
-                DisplayState::WaitForGuess => format!("Click on {}", game_state.current_city),
-            };
-            banner = SimpleImage::create_text_image(&font, &screen_text, FONT_SIZE, FONT_COLOR)?;
-        }
-
-        // Draw
-        let half_width = (WINDOW_WIDTH/2) as i32;
-        draw_image(window, &world_map, (0,0), Alignment::Left);
-        draw_image(window, &banner, (half_width, 25), Alignment::Center);
-        match *current_display_state {
-            DisplayState::WaitForServer { guess } => {
-                let p = guess.screen(window.width() as f64, window.height() as f64);
-                window.stroke_circle(p.x,
-                                     p.y,
-                                     5.0,
-                                     2.0,
-                                     [ 0xFF, 0, 0, 0xFF ])?;
+        match sender.send(SocketEvent::ClientMessage(socket_id, message)) {
+            Ok(_) => {},
+            Err(error) => {
+                eprintln!("{:?}", error);
+                break;
             },
-            DisplayState::WaitForContinue { guess, actual } => {
-                let guess_point = guess.screen(window.width() as f64, window.height() as f64);
-                let actual_point = actual.screen(window.width() as f64, window.height() as f64);
-
-                window.stroke_circle(guess_point.x,
-                                     guess_point.y,
-                                     5.0,
-                                     2.0,
-                                     [ 0xFF, 0, 0, 0xFF ])?;
-
-                window.stroke_circle(actual_point.x,
-                                     actual_point.y,
-                                     5.0,
-                                     3.0,
-                                     [ 0xFF, 0xFF, 0xFF, 0xFF ])?;
-            },
-            DisplayState::WaitForGuess => {},
         };
+    }
 
-        last_display_state = current_display_state.clone();
-        Ok(())
-    })?;
-
-    Ok(())
+    let _ = sender.send(SocketEvent::Disconnect(socket_id));
+    let _ = socket.shutdown(std::net::Shutdown::Both);
 }
+
