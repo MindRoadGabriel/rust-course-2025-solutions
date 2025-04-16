@@ -20,7 +20,7 @@ pub struct City {
 
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct CityGeometry {
-    coordinates: Coordinate,
+    pub coordinates: Coordinate,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]

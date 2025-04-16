@@ -12,209 +12,167 @@
 ///
 /// When you're done, connect to the teacher server and play with others who are done.
 
-use apricity::{Coordinate, Point, gui::*};
-use rustdemo::{helpers::exercise_11::draw_geo::*, protocol::*};
-use std::{net::TcpStream, sync::mpsc, thread, time::Duration};
-
-const SERVER_IP: &str = "127.0.0.1";
-const SERVER_PORT: u16 = 12345;
-
-const WINDOW_WIDTH: u32 = 1500;
-const WINDOW_HEIGHT: u32 = 750;
-
-const FONT_SIZE: f32 = 70.0;
-const FONT_COLOR: [u8;3] = [0xFF, 0x00, 0x00];
-
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum DisplayState {
-    WaitForGuess,
-    WaitForServer {
-        guess: Coordinate,
-    },
-    WaitForContinue {
-        guess: Coordinate,
-        actual: Coordinate,
-    },
-}
-
-pub struct GameState {
-    pub current_city: String,
-    pub display: DisplayState,
-    pub sender: mpsc::Sender<ClientMessage>,
-}
-
-impl GameState {
-    fn handle_click(&mut self, click_point: Point, window_width: u32, window_height: u32) {
-        match self.display {
-            DisplayState::WaitForGuess => {
-                let coordinate = click_point.coordinate(
-                    window_width as f64,
-                    window_height as f64,
-                );
-
-                self.sender.send(
-                    ClientMessage::Guess(coordinate)
-                ).unwrap();
-                self.display = DisplayState::WaitForServer {
-                    guess: coordinate,
-                };
-            },
-            DisplayState::WaitForServer { .. } => {},
-            DisplayState::WaitForContinue { .. } => {
-                self.display = DisplayState::WaitForGuess;
-            },
-        }
-    }
-}
+use std::error::Error;
+use std::io::Write;
+use std::net::TcpStream;
+use std::sync::mpsc::channel;
+use std::thread;
+use apricity::gui::{SimpleImage, Font, Event, Rect, MouseButton};
+use apricity::{Coordinate, Point};
+use rustdemo::helpers::exercise_11::draw_geo::create_world_map;
+use rustdemo::protocol::{ClientMessage, ServerMessage};
 
 fn load_font() -> Font<'static> {
     Font::try_from_bytes(ttf_noto_sans::REGULAR).unwrap()
 }
 
-fn connect_to_server() -> (mpsc::Sender<ClientMessage>, mpsc::Receiver<ServerMessage>) {
-    let (client_msg_sender, client_msg_receiver) = mpsc::channel();
-    let (server_msg_sender, server_msg_receiver) = mpsc::channel();
-
-    let socket = TcpStream::connect((SERVER_IP, SERVER_PORT)).unwrap();
-
-    let socket2 = socket.try_clone().unwrap();
-    std::thread::spawn(move || {
-        loop {
-            let response: ServerMessage = bincode::deserialize_from(&socket2).unwrap();
-            server_msg_sender.send(response).unwrap()
-        }
-    });
-
-    std::thread::spawn(move || {
-        for message in client_msg_receiver {
-            bincode::serialize_into(&socket, &message).unwrap();
-
-        }
-    });
-
-    (client_msg_sender, server_msg_receiver)
+enum GameState {
+    Starting,
+    Guessing {
+        city_name: String,
+    },
+    Waiting {
+        guess: Point,
+    },
+    Reviewing {
+        guess: Point,
+        actual: Point,
+    },
 }
 
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let world_map = create_world_map(WINDOW_WIDTH, WINDOW_HEIGHT)?;
+#[derive(Default, Debug)]
+struct TransitionInformation {
+    next_city: Option<String>,
+    next_actual_location: Option<Coordinate>,
+}
 
-    let window = SimpleWindow::new(WINDOW_WIDTH, WINDOW_HEIGHT)?;
+fn main() -> Result<(), Box<dyn Error>> {
+    // Create background
+    let width = 1500;
+    let height = 750;
+    let background_image = create_world_map(width, height)?;
 
-    let font = load_font();
-
-    let (sender, receiver) = connect_to_server();
-
-
-    sender.send(ClientMessage::Hello { name: "Ref. Client".to_string() })?;
-
-    let current_city = loop {
-        if let ServerMessage::Welcome { server_name } = receiver.recv()? {
-            println!("Connected to {}", server_name);
-            if let ServerMessage::NewRound { city_name } = receiver.recv()? {
-                break city_name.clone();
-            }
-        }
-
-        print!("Got an unexpected response from server.");
-        thread::sleep(Duration::from_millis(1500));
-        println!(" ...trying again.");
-        sender.send(ClientMessage::Hello { name: "Ref. Client".to_string() })?;
-    };
-
-    let game_state = GameState {
-        current_city: current_city.clone(),
-        display: DisplayState::WaitForGuess,
-        sender
-    };
-
-    let mut banner = SimpleImage::create_text_image(&font, &current_city, FONT_SIZE, FONT_COLOR)?;
-
-    let mut last_display_state = game_state.display.clone();
-    window.run(game_state, |window, game_state, events| {
-        // Handle server messages
-        while let Ok(message) = receiver.try_recv() {
-            match dbg!(message) {
-                ServerMessage::Welcome {..} => {},
-                ServerMessage::NewRound { city_name } => {
-                    game_state.current_city = city_name;
-                }
-                ServerMessage::RoundResults { actual_location: actual } => {
-                    match game_state.display {
-                        DisplayState::WaitForServer { guess } => {
-                            game_state.display = DisplayState::WaitForContinue {
-                                guess,
-                                actual,
-                            };
-                        },
-                        error => {
-                            Err(format!("Unexpected state {:#?}", error.clone()).to_string())?
-                        }
-                    }
-                },
-            }
-        }
-
-        // Read input
-        for event in events {
-            if let Event::MouseButtonUp { mouse_btn, clicks, x, y, .. } = event {
-                let mouse_clicked = mouse_btn == MouseButton::Left && clicks == 1;
-                if mouse_clicked {
-                    let click_point = Point::new(x as f64, y as f64);
-                    game_state.handle_click(click_point, WINDOW_WIDTH, WINDOW_HEIGHT);
-                }
-            }
-        }
-
-        // Handle game state
-        let current_display_state = &game_state.display;
-        if *current_display_state != last_display_state {
-            let screen_text = match *current_display_state {
-                DisplayState::WaitForServer { guess: _ } => "Waiting for other players".to_string(),
-                DisplayState::WaitForContinue { guess, actual } => {
-                    let distance_km = (guess.great_circle_distance(actual)/1000.0) as u32;
-                    format!("You were {}km off", distance_km)
-                },
-                DisplayState::WaitForGuess => format!("Click on {}", game_state.current_city),
-            };
-            banner = SimpleImage::create_text_image(&font, &screen_text, FONT_SIZE, FONT_COLOR)?;
-        }
-
-        // Draw
-        let half_width = (WINDOW_WIDTH/2) as i32;
-        draw_image(window, &world_map, (0,0), Alignment::Left);
-        draw_image(window, &banner, (half_width, 25), Alignment::Center);
-        match *current_display_state {
-            DisplayState::WaitForServer { guess } => {
-                let p = guess.screen(window.width() as f64, window.height() as f64);
-                window.stroke_circle(p.x,
-                                     p.y,
-                                     5.0,
-                                     2.0,
-                                     [ 0xFF, 0, 0, 0xFF ])?;
-            },
-            DisplayState::WaitForContinue { guess, actual } => {
-                let guess_point = guess.screen(window.width() as f64, window.height() as f64);
-                let actual_point = actual.screen(window.width() as f64, window.height() as f64);
-
-                window.stroke_circle(guess_point.x,
-                                     guess_point.y,
-                                     5.0,
-                                     2.0,
-                                     [ 0xFF, 0, 0, 0xFF ])?;
-
-                window.stroke_circle(actual_point.x,
-                                     actual_point.y,
-                                     5.0,
-                                     3.0,
-                                     [ 0xFF, 0xFF, 0xFF, 0xFF ])?;
-            },
-            DisplayState::WaitForGuess => {},
+    // Set up communication with the server
+    let mut socket = TcpStream::connect(("127.0.0.1", 12345)).unwrap();
+    let (tx, rx) = channel::<ServerMessage>();
+    let mut socket_receive = socket.try_clone().unwrap();
+    thread::spawn(move ||{
+        let message = ClientMessage::Hello {
+            name: "Gabriel".to_string()
         };
+        socket_receive.write(&bincode::serialize(&message).unwrap()).unwrap();
+        while let Ok(message) = bincode::deserialize_from::<&TcpStream, ServerMessage>(&socket_receive) {
+            tx.send(message).unwrap();
+        }
+        println!("Lost connection to server");
+    });
 
-        last_display_state = current_display_state.clone();
+    let window = apricity::gui::SimpleWindow::new(width, height)?;
+    let font = load_font();
+    // This is data that persists between frames, but is modified during runtime
+    // State is the current user-visible state of the game
+    // Transition info is data from the server which can trigger a transition, but that we may
+    // not be ready for when it arrives
+    let mut state = GameState::Starting;
+    let mut transition_info = TransitionInformation::default();
+    let mut current_text_image = SimpleImage::create_text_image(&font, "Please wait...", 72.0, [0xFF, 0x22, 0])?;
+
+    window.run((), |window, _, events| {
+        // Render background
+        window.draw_image(&background_image, None, false)?;
+
+        // Render guess and actual, if in the correct state
+        let red = [0xFF, 0, 0, 0xFF];
+        let blue = [0, 0, 0xFF, 0xFF];
+        match state {
+            GameState::Waiting { guess } => {
+                window.stroke_circle(guess.x, guess.y, 10.0, 1.0, red)?;
+            }
+            GameState::Reviewing { guess, actual } => {
+                window.stroke_circle(guess.x, guess.y, 10.0, 1.0, red)?;
+                window.stroke_circle(actual.x, actual.y, 10.0, 1.0, blue)?;
+            }
+            _ => {}
+        }
+        // Render text
+        let rect = Rect::new(10, 10, current_text_image.width(), current_text_image.height());
+        window.draw_image(&current_text_image, Some(rect), true)?;
+        // Listen for clicks
+        let mut click_location = None;
+        for event in events {
+            match event {
+                Event::MouseButtonDown { mouse_btn, x, y, .. } => {
+                    if let MouseButton::Left = mouse_btn {
+                        click_location = Some(Point::new(x as f64, y as f64));
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Listen for messages
+        match rx.try_recv().ok() {
+            Some(ServerMessage::Welcome { server_name }) => {
+                println!("Server {} welcomes you", server_name);
+            }
+            Some(ServerMessage::NewRound { city_name }) => {
+                println!("Next ciy: {}", city_name);
+                transition_info.next_city = Some(city_name);
+            }
+            Some(ServerMessage::RoundResults { actual_location }) => {
+                println!("Actual coordinate: {:?}", actual_location);
+                transition_info.next_actual_location = Some(actual_location);
+            }
+            _ => {}
+        }
+        // See if any of the incoming events are enough to change state
+        match (&state, click_location, &mut transition_info) {
+            // At startup, wait until the server gives the first target town,
+            // Then start guessing
+            (GameState::Starting, _, TransitionInformation {
+                next_city: city_option @ Some(_),
+                ..
+            })  |
+            (GameState::Reviewing { .. }, Some(_), TransitionInformation {
+                next_city: city_option @ Some(_),
+                ..
+            }) => {
+                let city_name = city_option.take().unwrap();
+                current_text_image = SimpleImage::create_text_image(&font, &format!("Where do you think {} is?", city_name), 72.0, [0xFF, 0x22, 0])?;
+                println!("Entering Guessing");
+                state = GameState::Guessing { city_name };
+                transition_info = TransitionInformation::default();
+            }
+
+            // When we've clicked somewhere to guess, start waiting
+            (GameState::Guessing { city_name }, Some(click), TransitionInformation { .. }) => {
+                let coordinate = click.coordinate(width as f64, height as f64);
+                let message = ClientMessage::Guess(coordinate);
+                socket.write(&bincode::serialize(&message)?).unwrap();
+                current_text_image = SimpleImage::create_text_image(&font, "Waiting for other players...", 72.0, [0xFF, 0x22, 0])?;
+
+                println!("Entering Waiting");
+                state = GameState::Waiting { guess: click };
+            }
+
+            // When the last player is done, we review how we did
+            (GameState::Waiting { guess: guess_point }, _, TransitionInformation {
+                next_actual_location: actual_option @ Some(_),
+                ..
+            }) => {
+                let actual_coordinate = actual_option.take().unwrap();
+                let actual_point = actual_coordinate.screen(width as f64, height as f64);
+                let guess_coordinate = guess_point.coordinate(width as f64, height as f64);
+                let distance = actual_coordinate.great_circle_distance(guess_coordinate);
+                current_text_image = SimpleImage::create_text_image(&font, &format!("You were {} km away", distance as u64), 72.0, [0xFF, 0x22, 0])?;
+
+                println!("Entering Reviewing");
+                state = GameState::Reviewing { guess: guess_point.clone(), actual: actual_point };
+                transition_info.next_actual_location = None;
+            }
+            // If none of these conditions are fulfilled, don't change state at all.
+            _ => {}
+        };
         Ok(())
-    })?;
-
-    Ok(())
+    })
 }
+

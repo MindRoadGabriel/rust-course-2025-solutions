@@ -10,11 +10,9 @@
 ///    let (sender, receiver) = std::sync::mpsc::channel::<SocketEvent>();
 ///    sender.send(SocketEvent::Connect(socket_id, socket_clone))
 ///
-
-
-use std::{collections::HashMap, net::TcpStream, sync::mpsc::{Receiver, Sender}};
-use std::io::{ Read, Write };
-use codepage_437::{BorrowFromCp437, CP437_CONTROL};
+use std::collections::HashMap;
+use std::io::{Write, Read};
+use std::net::TcpStream;
 
 pub enum SocketEvent {
     Connect(u32, TcpStream),
@@ -22,80 +20,58 @@ pub enum SocketEvent {
     Disconnect(u32),
 }
 
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (sender, receiver) = std::sync::mpsc::channel::<SocketEvent>();
-    std::thread::spawn(move || message_handler(receiver));
-
+pub fn main() -> Result<(), Box<dyn std::error::Error>>{
+    let (tx, rx) = std::sync::mpsc::channel::<SocketEvent>();
+    std::thread::spawn(move || {
+        let mut sockets = HashMap::new();
+        for event in rx {
+            match event {
+                SocketEvent::Connect(socket_id, socket) => {
+                    sockets.insert(socket_id, socket);
+                },
+                SocketEvent::Message(socket_id, message) => {
+                    for (current_id, mut stream) in sockets.iter() {
+                        if socket_id != *current_id {
+                            stream.write(message.as_bytes()).unwrap();
+                        }
+                    }
+                }
+                SocketEvent::Disconnect(socket_id) => {
+                    sockets.remove(&socket_id);
+                }
+            }
+        }
+    });
     let listener = std::net::TcpListener::bind(("0.0.0.0", 12345))?;
-    let mut socket_counter: u32 = 0;
+    let mut socket_counter = 0;
     for socket in listener.incoming() {
-        let socket = match socket {
+        let mut socket = match socket {
             Ok(x) => x,
             Err(e) => {
                 eprintln!("{:?}", e);
                 continue;
             },
         };
-
         let socket_id = socket_counter;
         socket_counter += 1;
 
-        let client_sender = sender.clone();
-        std::thread::spawn(move || connection_handler(socket_id, socket, client_sender));
-    }
+        let socket_clone = socket.try_clone().unwrap();
+        tx.send(SocketEvent::Connect(socket_id, socket_clone)).unwrap();
 
+        let tx = tx.clone();
+        std::thread::spawn(move ||{
+            socket.write(": ".to_string().as_bytes()).unwrap();
+            let mut buffer = [0; 1024];
+            while let Ok(len) = socket.read(&mut buffer) {
+                if len == 0 {
+                    break;
+                }
+                let s = std::str::from_utf8(&buffer[0..len]).unwrap();
+                println!("{}", &s);
+                tx.send(SocketEvent::Message(socket_id, s.to_string())).unwrap();
+            }
+            tx.send(SocketEvent::Disconnect(socket_id)).unwrap();
+        });
+    }
     Ok(())
 }
-
-fn message_handler(receiver: Receiver<SocketEvent>) {
-    let mut sockets = HashMap::new();
-    for event in receiver {
-        match event {
-            SocketEvent::Connect(socket_id, socket) => {
-                sockets.insert(socket_id.clone(), socket);
-                println!("New connection received. socket_id = {socket_id}");
-            },
-            SocketEvent::Message(sender_id, message) => {
-                println!(r#"Received message "{message}" from socket_id {sender_id},"#);
-                for (socket_id, socket) in &mut sockets {
-                    if *socket_id != sender_id {
-                        socket.write(&message.clone().into_bytes()).unwrap();
-                        println!("   ...parroting to socket_id {socket_id},", );
-                    }
-                }
-            },
-            SocketEvent::Disconnect(socket_id) => {
-                sockets.remove(&socket_id);
-                println!("Connection lost. socket_id = {socket_id}");
-            },
-        }
-    }
-}
-
-fn connection_handler(socket_id: u32, mut socket: TcpStream, sender: Sender<SocketEvent>) {
-    let socket2 = socket.try_clone().unwrap();
-    if let Err(error) = sender.send(SocketEvent::Connect(socket_id, socket2)) {
-        eprintln!("{:?}", error);
-        let _ = socket.shutdown(std::net::Shutdown::Both);
-        return;
-    }
-
-    let mut buffer = [0; 1024];
-    while let Ok(len) = socket.read(&mut buffer) {
-        if len == 0 {
-            break;
-        }
-        let message: String = BorrowFromCp437::borrow_from_cp437(&buffer[0..len], &CP437_CONTROL);
-        match sender.send(SocketEvent::Message(socket_id, message)) {
-            Ok(_) => {},
-            Err(error) => {
-                eprintln!("{:?}", error);
-                break;
-            },
-        };
-    }
-
-    let _ = sender.send(SocketEvent::Disconnect(socket_id));
-    let _ = socket.shutdown(std::net::Shutdown::Both);
-}
-
